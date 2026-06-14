@@ -5,9 +5,8 @@
 #include <map>
 #include <iomanip>
 #include "AtspGraph.h"
-#include "TabuSearch.h"
+#include "GeneticAlgorithm.h"
 
-// rozwiazania
 std::map<std::string, int> optimalValues = {
     {"br17.atsp", 39}, {"ftv33.atsp", 1286}, {"ftv38.atsp", 1530},
     {"p43.atsp", 5620}, {"ry48p.atsp", 14422}, {"ftv55.atsp", 1608},
@@ -19,86 +18,190 @@ double calculateError(long long found, int optimal) {
     return ((double)(found - optimal) / optimal) * 100.0;
 }
 
+// =====================================================================
+// KOMBAJN BADAWCZY - GENERATOR SPRAWOZDANIA
+// =====================================================================
 void runAutomatedTests() {
     std::vector<std::string> allFiles = {
         "br17.atsp", "ftv33.atsp", "ftv38.atsp", "p43.atsp", "ry48p.atsp",
         "ftv55.atsp", "ftv70.atsp", "kro124p.atsp", "rbg323.atsp", "rbg403.atsp", "ftv170.atsp"
     };
 
-    std::cout << "\n>>> URUCHAMIANIE BADAŃ AUTOMATYCZNYCH... <<<\n";
-    std::ofstream out("wyniki_kompletne.csv");
-    out << "TestType;Plik;Kadencja;RozmiarListy;Koszt;Blad(%);Czas(s)\n";
+    double limitOthers = 60.0; // 1 min na iterację dla testow 3.5, 4.0, 4.5, 5.0
+    double limitRozmiar = 900.0; // 15 min dla testu rozmiaru (3.0)
 
+    std::cout << "\n>>> START AUTOMATYCZNYCH BADAN <<<\n";
+
+    // 1. Ocena 3.0 - Wpływ rozmiaru (15 min)
+    std::cout << "[1/5] Test 3.0: Zaleznosc czasu/bledu od rozmiaru (LIMIT = 15min)...\n";
+    std::ofstream out1("wyniki_3_0_rozmiar.csv");
+    out1 << "Plik;N;Optimum;KosztZnaleziony;SredniaPop;Blad(%);CzasZnalezieniaRekordu(s)\n";
     for (const auto& file : allFiles) {
-        AtspGraph graph;
-        if (!graph.loadFromFile(file)) continue;
+        AtspGraph g; if (!g.loadFromFile(file)) continue;
+        GeneticAlgorithm ga(g);
+        ga.setParameters(limitRozmiar, 100, 0.05, 0.8, 1, 1, 2); // Turniej, OX, Inwersja
+        std::cout << " -> " << file << "... " << std::flush;
+        GeneticResult res = ga.solve();
         int opt = optimalValues[file];
-
-        std::cout << "Analiza: " << file << "..." << std::endl;
-
-        // Testy parametrow (Kadencja/Rozmiar)
-        for(int ten : {2, 25, 50}) {
-            for(int size : {5, 20, 100}) {
-                TabuSearch ts(graph);
-                ts.setTimeLimit(60.0);
-                ts.setTabuTenure(ten);
-                ts.setMaxTabuListSize(size);
-                Solution res = ts.solve(ts.generateInitialSolutionRNN());
-                out << "Parametry;" << file << ";" << ten << ";" << size << ";"
-                    << res.totalCost << ";" << calculateError(res.totalCost, opt) << ";60.0\n";
-            }
-        }
-        // Test Aspiracji
-        TabuSearch tsA(graph);
-        tsA.setTimeLimit(60.0);
-        tsA.setAspiration(true);
-        Solution resOn = tsA.solve(tsA.generateInitialSolutionRNN());
-        out << "AspiracjaON;" << file << ";25;100;" << resOn.totalCost << ";" << calculateError(resOn.totalCost, opt) << ";60.0\n";
+        out1 << file << ";" << g.getDimension() << ";" << opt << ";" << res.bestCost << ";"
+             << res.averageLastPopulationCost << ";" << calculateError(res.bestCost, opt) << ";" << res.timeToFindBest << "\n";
+        std::cout << "OK (" << calculateError(res.bestCost, opt) << "%)\n";
     }
-    out.close();
-    std::cout << "Badania zakonczone. Wyniki w 'wyniki_kompletne.csv'\n";
+    out1.close();
+
+    // 2. Ocena 3.5 - Wpływ populacji
+    std::cout << "\n[2/5] Test 3.5: Wplyw rozmiaru populacji...\n";
+    std::ofstream out2("wyniki_3_5_populacja.csv");
+    out2 << "Plik;RozmiarPopulacji;KosztZnaleziony;Blad(%);CzasZnalezieniaRekordu(s)\n";
+    std::vector<int> popSizes = {10, 50, 100, 200};
+    for (const auto& file : allFiles) {
+        AtspGraph g; if (!g.loadFromFile(file)) continue;
+        int opt = optimalValues[file];
+        for (int pop : popSizes) {
+            GeneticAlgorithm ga(g);
+            ga.setParameters(limitOthers, pop, 0.05, 0.8, 1, 1, 2);
+            GeneticResult res = ga.solve();
+            out2 << file << ";" << pop << ";" << res.bestCost << ";" << calculateError(res.bestCost, opt) << ";" << res.timeToFindBest << "\n";
+        }
+        std::cout << " -> " << file << " ukonczono.\n";
+    }
+    out2.close();
+
+    // 3. Ocena 4.0 - Wpływ metody mutacji (Swap vs Inwersja)
+    std::cout << "\n[3/5] Test 4.0: Wplyw metody mutacji...\n";
+    std::ofstream out3("wyniki_4_0_mutacja.csv");
+    out3 << "Plik;MetodaMutacji;KosztZnaleziony;Blad(%);CzasZnalezieniaRekordu(s)\n";
+    for (const auto& file : allFiles) {
+        AtspGraph g; if (!g.loadFromFile(file)) continue;
+        int opt = optimalValues[file];
+        for (int mut = 1; mut <= 2; ++mut) {
+            GeneticAlgorithm ga(g);
+            ga.setParameters(limitOthers, 100, 0.05, 0.8, 1, 1, mut);
+            GeneticResult res = ga.solve();
+            out3 << file << ";" << (mut==1 ? "Swap" : "Inwersja") << ";" << res.bestCost << ";" << calculateError(res.bestCost, opt) << ";" << res.timeToFindBest << "\n";
+        }
+    }
+    out3.close();
+
+    // 4. Ocena 4.5 - Wpływ metody krzyżowania (OX vs PMX)
+    std::cout << "\n[4/5] Test 4.5: Wplyw metody krzyzowania...\n";
+    std::ofstream out4("wyniki_4_5_krzyzowanie.csv");
+    out4 << "Plik;MetodaKrzyzowania;KosztZnaleziony;Blad(%);CzasZnalezieniaRekordu(s)\n";
+    for (const auto& file : allFiles) {
+        AtspGraph g; if (!g.loadFromFile(file)) continue;
+        int opt = optimalValues[file];
+        for (int cross = 1; cross <= 2; ++cross) {
+            GeneticAlgorithm ga(g);
+            ga.setParameters(limitOthers, 100, 0.05, 0.8, 1, cross, 2);
+            GeneticResult res = ga.solve();
+            out4 << file << ";" << (cross==1 ? "OX" : "PMX") << ";" << res.bestCost << ";" << calculateError(res.bestCost, opt) << ";" << res.timeToFindBest << "\n";
+        }
+    }
+    out4.close();
+
+    // 5. Ocena 5.0 - Wpływ metody selekcji (Turniej vs Ruletka)
+    std::cout << "\n[5/5] Test 5.0: Wplyw metody selekcji...\n";
+    std::ofstream out5("wyniki_5_0_selekcja.csv");
+    out5 << "Plik;MetodaSelekcji;KosztZnaleziony;Blad(%);CzasZnalezieniaRekordu(s)\n";
+    for (const auto& file : allFiles) {
+        AtspGraph g; if (!g.loadFromFile(file)) continue;
+        int opt = optimalValues[file];
+        for (int sel = 1; sel <= 2; ++sel) {
+            GeneticAlgorithm ga(g);
+            ga.setParameters(limitOthers, 100, 0.05, 0.8, sel, 1, 2);
+            GeneticResult res = ga.solve();
+            out5 << file << ";" << (sel==1 ? "Turniej" : "Ruletka") << ";" << res.bestCost << ";" << calculateError(res.bestCost, opt) << ";" << res.timeToFindBest << "\n";
+        }
+    }
+    out5.close();
+
+    std::cout << "\n>>> ZAKONCZONO POMYSLNIE! Wszystkie pliki .csv wygenerowane. <<<\n";
 }
 
 int main() {
     AtspGraph graph;
-    TabuSearch* ts = nullptr;
+    GeneticAlgorithm* ga = nullptr;
+
+    // Domyslne parametry algorytmu
     double timeLimit = 60.0;
-    int tenure = 15;
-    int listSize = 100;
-    bool initialGenerated = false;
-    Solution initialSol;
+    int populationSize = 100;
+    double mutationRate = 0.05;   // 5%
+    double crossoverRate = 0.80;  // 80%
+
+    int selectionMethod = 1; // 1: Turniej, 2: Ruletka
+    int crossoverMethod = 1; // 1: OX (Order), 2: PMX
+    int mutationMethod = 2;  // 1: Swap, 2: Inwersja (Inwersja jest zazwyczaj lepsza dla TSP)
+
+    std::string currentFile = "";
 
     int choice;
     do {
-        std::cout << "\n--- MENU TS ---\n1. Wczytaj plik\n2. Czas stopu (aktualnie: " << timeLimit << "s)\n3. RNN (Rozwiazanie pocz.)\n4. Parametry (Tenure=" << tenure << ", Size=" << listSize << ")\n5. Start TS\n6. AUTO-TESTY\n0. Wyjdz\nWybor: ";
+        std::cout << "\n=== ALGORYTM GENETYCZNY (TSP/ATSP) ===\n";
+        std::cout << "1. Wczytanie danych z pliku (obecnie: " << (currentFile.empty() ? "brak" : currentFile) << ")\n";
+        std::cout << "2. Kryterium stopu [czas w sek.] (obecnie: " << timeLimit << " s)\n";
+        std::cout << "3. Wielkosc populacji poczatkowej (obecnie: " << populationSize << ")\n";
+        std::cout << "4. Wspolczynnik mutacji (obecnie: " << mutationRate << ")\n";
+        std::cout << "5. Wspolczynnik krzyzowania (obecnie: " << crossoverRate << ")\n";
+        std::cout << "6. Wybor metody krzyzowania (obecnie: " << (crossoverMethod == 1 ? "OX" : "PMX") << ")\n";
+        std::cout << "7. Wybor metody mutacji (obecnie: " << (mutationMethod == 1 ? "Swap" : "Inwersja") << ")\n";
+        std::cout << "8. Wybor metody selekcji (obecnie: " << (selectionMethod == 1 ? "Turniej" : "Ruletka") << ")\n";
+        std::cout << "9. URUCHOM ALGORYTM\n";
+        std::cout << "10. AUTO-TESTY (Generowanie plikow do sprawozdania)\n";
+        std::cout << "0. Wyjscie\n";
+        std::cout << "Wybor: ";
         std::cin >> choice;
 
-        switch(choice) {
+        switch (choice) {
             case 1: {
-                std::string f; std::cout << "Nazwa: "; std::cin >> f;
-                if(graph.loadFromFile(f)) {
-                    if(ts) delete ts;
-                    ts = new TabuSearch(graph);
-                    initialGenerated = false;
+                std::cout << "Podaj nazwe pliku (np. ftv47.atsp): ";
+                std::cin >> currentFile;
+                if (graph.loadFromFile(currentFile)) {
+                    std::cout << "Wczytano pomyslnie. Rozmiar: " << graph.getDimension() << "\n";
+                    if (ga) delete ga;
+                    ga = new GeneticAlgorithm(graph);
+                } else {
+                    currentFile = "";
                 }
                 break;
             }
-            case 2: std::cout << "Czas: "; std::cin >> timeLimit; if(ts) ts->setTimeLimit(timeLimit); break;
-            case 3: initialSol = ts->generateInitialSolutionRNN(); initialGenerated = true; std::cout << "Koszt RNN: " << initialSol.totalCost << "\n"; break;
-            case 4: std::cout << "Tenure: "; std::cin >> tenure; std::cout << "ListSize: "; std::cin >> listSize;
-                    ts->setTabuTenure(tenure); ts->setMaxTabuListSize(listSize); break;
-            case 5: {
-                if(!initialGenerated) initialSol = ts->generateInitialSolutionRNN();
-                Solution best = ts->solve(initialSol);
-                std::cout << "Wynik: " << best.totalCost << "\nTrasa: ";
-                for(int i : best.path) std::cout << i << " ";
-                std::cout << "\n";
+            case 2: std::cout << "Podaj czas [s]: "; std::cin >> timeLimit; break;
+            case 3: std::cout << "Podaj wielkosc populacji: "; std::cin >> populationSize; break;
+            case 4: std::cout << "Podaj wspolczynnik mutacji (0.0 - 1.0): "; std::cin >> mutationRate; break;
+            case 5: std::cout << "Podaj wspolczynnik krzyzowania (0.0 - 1.0): "; std::cin >> crossoverRate; break;
+            case 6: std::cout << "Metoda krzyzowania (1-OX, 2-PMX): "; std::cin >> crossoverMethod; break;
+            case 7: std::cout << "Metoda mutacji (1-Swap, 2-Inwersja): "; std::cin >> mutationMethod; break;
+            case 8: std::cout << "Metoda selekcji (1-Turniej, 2-Ruletka): "; std::cin >> selectionMethod; break;
+            case 9: {
+                if (!graph.isLoaded() || !ga) {
+                    std::cout << "Brak danych! Najpierw wczytaj plik (Opcja 1).\n";
+                    break;
+                }
+                ga->setParameters(timeLimit, populationSize, mutationRate, crossoverRate,
+                                  selectionMethod, crossoverMethod, mutationMethod);
+
+                std::cout << "\nTrwa ewolucja (" << timeLimit << " s)...\n";
+                GeneticResult result = ga->solve();
+
+                int optimum = optimalValues.count(currentFile) ? optimalValues[currentFile] : -1;
+
+                std::cout << "\n=== WYNIKI ===\n";
+                std::cout << "Najlepsze znalezione rozwiazanie: " << result.bestCost << "\n";
+                std::cout << "Czas znalezienia najlepszego (s): " << result.timeToFindBest << "\n";
+                std::cout << "Srednia dlugosc w ostatniej populacji: " << result.averageLastPopulationCost << "\n";
+
+                if (optimum != -1) {
+                    double errBest = calculateError(result.bestCost, optimum);
+                    double errAvg = calculateError(result.averageLastPopulationCost, optimum);
+                    std::cout << "Optimum dla " << currentFile << ": " << optimum << "\n";
+                    std::cout << "Blad (najlepsze): " << errBest << " %\n";
+                    std::cout << "Blad (srednia ost. pop.): " << errAvg << " %\n";
+                }
                 break;
             }
-            case 6: runAutomatedTests(); break;
+            case 10: runAutomatedTests(); break;
         }
-    } while(choice != 0);
+    } while (choice != 0);
 
-    if(ts) delete ts;
+    if (ga) delete ga;
     return 0;
 }
